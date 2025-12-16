@@ -1,0 +1,240 @@
+# ============================================================
+# SECRET: Credenciales de la base de datos 
+# ============================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-secrets
+type: Opaque
+data:
+  DB_USER: YXBpdXNlcg==          # base64("apiuser")
+  DB_PASSWORD: c3VwZXJzZWNyZXRv  # base64("supersecreto")
+  POSTGRES_USER: YXBpdXNlcg==    # same as DB_USER
+  POSTGRES_PASSWORD: c3VwZXJzZWNyZXRv
+
+---
+
+# ============================================================
+# CONFIGMAP: Variables no sensibles
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  TARGET_IP: "apieko"
+  DB_HOST: "dbeko"
+  DB_NAME: "mydb"
+  DB_PORT: "5432"
+
+---
+
+# ============================================================
+# PVC: Persistencia para PostgreSQL
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dbeko-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+
+# ============================================================
+# DEPLOYMENT: PostgreSQL (dbeko)
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbeko
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dbeko
+  template:
+    metadata:
+      labels:
+        app: dbeko
+    spec:
+      containers:
+        - name: dbeko
+          image: ynot1074/dbeko:0.1
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-secrets
+                  key: POSTGRES_USER
+
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-secrets
+                  key: POSTGRES_PASSWORD
+
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: DB_NAME
+          volumeMounts:
+            - name: dbeko-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: dbeko-data
+          persistentVolumeClaim:
+            claimName: dbeko-pvc
+
+---
+
+# ============================================================
+# SERVICE: PostgreSQL
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: dbeko
+spec:
+  selector:
+    app: dbeko
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+
+---
+
+# ============================================================
+# DEPLOYMENT: API (apieko)
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apieko
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apieko
+  template:
+    metadata:
+      labels:
+        app: apieko
+    spec:
+      containers:
+        - name: apieko
+          image: ynot1074/apieko:0.1
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: DB_HOST
+
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: DB_NAME
+
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: DB_PORT
+
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-secrets
+                  key: DB_USER
+
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-secrets
+                  key: DB_PASSWORD
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+---
+
+# ============================================================
+# SERVICE: API
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: apieko
+spec:
+  selector:
+    app: apieko
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+
+---
+
+# ============================================================
+# DEPLOYMENT: Frontend
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fronteko
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fronteko
+  template:
+    metadata:
+      labels:
+        app: fronteko
+    spec:
+      containers:
+        - name: fronteko
+          image: ynot1074/fronteko:0.1
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TARGET_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: TARGET_IP
+
+---
+
+# ============================================================
+# SERVICE: FRONTEND (expose publicly)
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: fronteko
+spec:
+  type: LoadBalancer
+  selector:
+    app: fronteko
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+
